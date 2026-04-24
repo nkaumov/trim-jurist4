@@ -52,7 +52,10 @@ export function registerCaseFilesRoutes(app: FastifyInstance) {
         });
       }
 
-      assertAllowedMimeType(uploadedFile.mimetype);
+      assertAllowedMimeType({
+        mimeType: uploadedFile.mimetype,
+        filename: uploadedFile.filename,
+      });
 
       const stored = await storage.saveFile({
         stream: uploadedFile.file as any,
