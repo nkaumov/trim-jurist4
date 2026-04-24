@@ -1,0 +1,556 @@
+Ты senior full-stack engineer. Разрабатываешь MVP веб-приложения для юристов. Пиши код аккуратно, модульно, без монолитных файлов. Нужна чистая архитектура, понятная структура проекта, хорошая типизация, читаемые названия, готовность к дальнейшему развитию. Интерфейс должен быть удобный, многостраничный, с хорошими layout-ами. Используй Docker.
+
+ЦЕЛЬ ПРОЕКТА
+Создать рабочее место юриста, где пользователь:
+1) авторизуется;
+2) создает дело;
+3) загружает основной договор;
+4) загружает дополнительные документы;
+5) загружает разногласия одним из способов:
+   - отдельный документ с протоколом разногласий;
+   - свободный текст пожеланий/замечаний клиента;
+   - ручной ввод позиций разногласий;
+6) при необходимости загружает свои документы в пользовательскую базу знаний;
+7) запускает анализ;
+8) получает структурированный результат от ИИ:
+   - спорные пункты;
+   - позиции сторон;
+   - комментарий ИИ;
+   - рекомендацию;
+   - уровень риска;
+   - основания / ссылки на внутренние правила / ФЗ / документы БЗ;
+   - предложенную редакцию;
+   - собранный проект протокола разногласий.
+
+ВАЖНО
+- Сам ИИ не реализовываем внутри приложения.
+- Приложение должно быть готово к интеграции с внешней платформой агента по API.
+- Пока делаем backend proxy/stub слой, через который потом будет подключаться реальный агент.
+- Все результаты ИИ считаются рекомендациями, финальное решение принимает юрист.
+
+СТЕК
+Сделай monorepo:
+- frontend: Next.js (App Router, TypeScript)
+- ui: Tailwind CSS + shadcn/ui
+- backend: Node.js + Fastify + TypeScript
+- orm: Prisma
+- db: PostgreSQL
+- auth: JWT access/refresh
+- file storage: локально через volume, но архитектурно подготовить абстракцию под S3/MinIO
+- docker: docker-compose
+- validation: zod
+- state on frontend: React Query + server actions only where it уместно
+- forms: react-hook-form + zod
+- tables/lists: аккуратные, читаемые, без перегруза
+- notifications: toast
+- icons: lucide-react
+
+АРХИТЕКТУРА
+Нужны 3 контейнера:
+1. frontend
+2. backend
+3. postgres
+
+Опционально подготовь место под 4-й контейнер later:
+4. minio (не обязательно включать сразу, но storage слой должен быть расширяемым)
+
+СТРУКТУРА ПРОЕКТА
+Сделай понятную структуру примерно такого уровня:
+
+/apps
+  /frontend
+  /backend
+/packages
+  /shared-types
+  /ui-config
+/docker
+/prisma
+/docs
+
+FRONTEND
+- app router
+- отдельные route groups для auth и app
+- layouts
+- server/client components по ситуации
+- адаптивность desktop-first, но без поломки mobile
+- слева sidebar, сверху header
+- чистый деловой интерфейс без лишней анимации
+
+BACKEND
+Модульная структура:
+- auth
+- users
+- organizations
+- cases
+- case-files
+- disagreements
+- knowledge
+- analyses
+- ai-integration
+- audit
+- storage
+
+БАЗА ДАННЫХ
+Сразу спроектируй полную БД под MVP. Нужны таблицы и связи.
+
+1. users
+- id
+- organization_id
+- full_name
+- email (unique)
+- password_hash
+- role (admin, lawyer)
+- is_active
+- created_at
+- updated_at
+- last_login_at
+
+2. organizations
+- id
+- name
+- slug
+- description
+- created_at
+- updated_at
+
+3. agent_configs
+конфигурация подключения к внешнему агенту для организации
+- id
+- organization_id
+- provider_name
+- base_url
+- api_key_encrypted
+- model_name nullable
+- system_prompt_version nullable
+- is_active
+- created_at
+- updated_at
+
+4. global_knowledge_sources
+общая база знаний платформы
+- id
+- title
+- description
+- source_type (law, regulation, template, guideline, other)
+- file_path nullable
+- external_url nullable
+- mime_type nullable
+- tags string[]
+- is_active
+- created_at
+- updated_at
+
+5. organization_knowledge_sources
+пользовательская база знаний конкретной компании
+- id
+- organization_id
+- uploaded_by_user_id
+- title
+- description
+- source_type (template, policy, precedent, guideline, other)
+- file_path nullable
+- external_url nullable
+- mime_type nullable
+- tags string[]
+- is_active
+- created_at
+- updated_at
+
+6. cases
+- id
+- organization_id
+- created_by_user_id
+- title
+- counterparty_name
+- status (draft, ready_for_analysis, analyzing, completed, archived, failed)
+- description nullable
+- priority (low, medium, high)
+- contract_type nullable
+- notes nullable
+- created_at
+- updated_at
+- archived_at nullable
+
+7. case_files
+все файлы внутри дела
+- id
+- case_id
+- uploaded_by_user_id
+- file_category (main_contract, appendix, disagreement_document, client_note_attachment, analysis_result_attachment, other)
+- original_name
+- stored_name
+- file_path
+- mime_type
+- file_size
+- extracted_text nullable
+- created_at
+
+8. disagreement_inputs
+способ ввода разногласий в дело
+- id
+- case_id
+- input_type (document, free_text, manual_items)
+- free_text nullable
+- created_by_user_id
+- created_at
+- updated_at
+
+9. disagreement_items
+ручные позиции разногласий
+- id
+- disagreement_input_id
+- clause_number nullable
+- clause_title nullable
+- our_version nullable
+- counterparty_version nullable
+- client_request nullable
+- comment nullable
+- sort_order
+- created_at
+- updated_at
+
+10. analysis_runs
+каждый запуск анализа
+- id
+- case_id
+- started_by_user_id
+- status (queued, processing, completed, failed)
+- request_payload_json
+- response_payload_json nullable
+- summary nullable
+- final_recommendation nullable
+- draft_protocol_text nullable
+- error_message nullable
+- started_at
+- finished_at nullable
+- created_at
+
+11. analysis_positions
+структурированный результат анализа по каждому спорному пункту
+- id
+- analysis_run_id
+- clause_number nullable
+- clause_title
+- our_version nullable
+- counterparty_version nullable
+- ai_comment
+- recommendation
+- suggested_protocol_text nullable
+- risk_level (low, medium, high)
+- sort_order
+- created_at
+- updated_at
+
+12. analysis_position_bases
+основания для рекомендации
+- id
+- analysis_position_id
+- basis_type (law, internal_rule, knowledge_doc, template, comment, other)
+- source_title
+- source_reference nullable
+- quote_text nullable
+- priority_order
+- created_at
+
+13. case_status_history
+- id
+- case_id
+- changed_by_user_id
+- from_status nullable
+- to_status
+- comment nullable
+- created_at
+
+14. audit_logs
+- id
+- organization_id nullable
+- user_id nullable
+- entity_type
+- entity_id
+- action
+- payload_json nullable
+- created_at
+
+ИНДЕКСЫ
+Добавь нужные индексы:
+- users.email
+- organizations.slug
+- cases.organization_id + updated_at
+- cases.status
+- analysis_runs.case_id + created_at
+- organization_knowledge_sources.organization_id
+- case_files.case_id
+- disagreement_items.disagreement_input_id + sort_order
+- analysis_positions.analysis_run_id + sort_order
+
+БЭКЕНД API
+Сделай REST API.
+
+AUTH
+- POST /auth/register
+- POST /auth/login
+- POST /auth/refresh
+- POST /auth/logout
+- GET /auth/me
+
+ORGANIZATION
+- GET /organization/me
+
+CASES
+- GET /cases
+  фильтры: status, search, priority, page, limit
+- POST /cases
+- GET /cases/:id
+- PATCH /cases/:id
+- DELETE /cases/:id (soft delete/archive)
+- POST /cases/:id/archive
+
+CASE FILES
+- POST /cases/:id/files
+- GET /cases/:id/files
+- DELETE /case-files/:id
+
+DISAGREEMENTS
+- POST /cases/:id/disagreement-input
+- PATCH /disagreement-inputs/:id
+- POST /disagreement-inputs/:id/items
+- PATCH /disagreement-items/:id
+- DELETE /disagreement-items/:id
+
+KNOWLEDGE
+- GET /knowledge/global
+- GET /knowledge/organization
+- POST /knowledge/organization/files
+- PATCH /knowledge/organization/:id
+- DELETE /knowledge/organization/:id
+
+ANALYSIS
+- POST /cases/:id/analyze
+- GET /cases/:id/analysis-runs
+- GET /analysis-runs/:id
+- GET /analysis-runs/:id/positions
+
+AI INTEGRATION
+Сделай отдельный сервис-адаптер.
+Пока не подключай реального провайдера.
+Сделай mock provider, который возвращает структурированный ответ в нужном JSON формате.
+Вынеси интерфейс провайдера так, чтобы потом можно было легко заменить mock на реальный HTTP API.
+
+ФОРМАТ RESPONSE ОТ AI
+Сервис анализа должен уметь принимать и возвращать структуру такого типа:
+
+{
+  "caseSummary": "string",
+  "finalRecommendation": "string",
+  "draftProtocolText": "string",
+  "positions": [
+    {
+      "clauseNumber": "4.2",
+      "clauseTitle": "Срок оплаты",
+      "ourVersion": "string",
+      "counterpartyVersion": "string",
+      "aiComment": "string",
+      "recommendation": "string",
+      "suggestedProtocolText": "string",
+      "riskLevel": "medium",
+      "bases": [
+        {
+          "basisType": "internal_rule",
+          "sourceTitle": "Политика по отсрочке",
+          "sourceReference": "раздел 2",
+          "quoteText": "..."
+        }
+      ]
+    }
+  ]
+}
+
+СТРАНИЦЫ FRONTEND
+Сделай многостраничный интерфейс.
+
+1. /login
+- вход
+
+2. Регистрации нет - только выдача доступов
+
+
+
+3. /app
+dashboard:
+- карточки статистики
+- последние дела
+- быстрые действия
+
+4. /app/cases
+- список дел
+- фильтры
+- поиск
+- статусы
+- пагинация
+
+5. /app/cases/new
+- создание дела
+
+6. /app/cases/[id]
+страница дела с табами:
+- Overview
+- Documents
+- Disagreements
+- Knowledge
+- Analysis
+- History
+
+7. /app/knowledge
+- общая информация по БЗ организации
+- список документов
+- загрузка
+- фильтры
+
+8. /app/settings
+- профиль
+- организация
+- конфиг подключения агента
+- заглушка под системный промт/версию агента
+
+ДЕТАЛИ СТРАНИЦЫ ДЕЛА
+Overview
+- основная информация по делу
+- статус
+- контрагент
+- тип договора
+- приоритет
+- заметки
+
+Documents
+- загрузка основного договора
+- загрузка приложений
+- список файлов
+- категории файлов
+
+Disagreements
+- переключатель способа ввода:
+  1) document
+  2) free text
+  3) manual items
+- если document: загрузка файла
+- если free text: textarea
+- если manual items: таблица позиций с CRUD
+
+Knowledge
+- загрузка локальных документов в БЗ именно для этой организации
+- выбор уже существующих документов организации
+- можно показать подсказку, что эти документы будут использоваться агентом
+
+Analysis
+- кнопка “Запустить анализ”
+- список запусков анализа
+- блок результата:
+  - summary
+  - final recommendation
+  - draft protocol
+  - positions list
+- positions показывать красиво карточками:
+  - пункт
+  - позиция нашей стороны
+  - позиция второй стороны
+  - комментарий ИИ
+  - рекомендация
+  - риск badge
+  - основания
+
+History
+- история статусов
+- аудит основных действий
+
+ТРЕБОВАНИЯ К UI/UX
+- интерфейс строгий, деловой, аккуратный
+- не лепить все на одну страницу
+- использовать layouts
+- sidebar navigation
+- header with breadcrumbs
+- блоки с нормальными отступами
+- формы не растягивать бесконечно
+- таблицы и карточки должны быть читаемыми
+- все состояния должны быть предусмотрены:
+  - loading
+  - empty
+  - error
+  - success
+- сделать приятные skeleton loaders
+- везде нормальные названия полей на русском языке
+- код при этом на английском
+
+ТРЕБОВАНИЯ К ФАЙЛАМ
+- поддержать загрузку pdf, docx, txt
+- сохранять метаданные файла в БД
+- extracted_text пока можно делать mock/null, но architecture должна позволять потом подключить parser pipeline
+
+ТРЕБОВАНИЯ К БЕЗОПАСНОСТИ
+- не хранить api ключ в открытом виде
+- подготовить encrypted storage abstraction
+- JWT + refresh token
+- protected routes
+- basic role checks
+- file upload validation
+- size limits
+- mime validation
+
+DOCKER
+Сделай docker-compose.yml для локального запуска:
+- frontend
+- backend
+- postgres
+
+Нужны:
+- Dockerfile для frontend
+- Dockerfile для backend
+- .env.example для frontend и backend
+- volume для postgres
+- volume для uploaded files
+
+ПОДГОТОВЬ README
+README должен содержать:
+1) описание проекта
+2) стек
+3) запуск через docker compose
+4) локальный запуск без docker
+5) применение prisma migrations
+6) seed
+7) где менять mock AI integration на реальный provider
+
+SEED DATA
+Сделай seed:
+- 1 organization
+- 1 admin
+- 2 lawyer users
+- 3 cases
+- 1-2 knowledge documents
+- 1 analysis run с несколькими позициями
+
+CODE STYLE
+- никаких огромных файлов
+- выносить типы, схемы, DTO, services, repositories отдельно
+- минимально дублировать код
+- писать так, будто проект будет жить долго
+- комментарии только там, где реально полезно
+- избегать хрупких решений
+- все названия сущностей, сервисов и методов должны быть понятными
+
+ЧТО НУЖНО ОТ ТЕБЯ ПО РЕЗУЛЬТАТУ
+Сначала создай полный каркас проекта.
+Потом реализуй:
+1) docker setup
+2) prisma schema + migrations
+3) auth
+4) CRUD cases
+5) file uploads
+6) disagreements
+7) knowledge
+8) mock ai analysis
+9) frontend pages and layouts
+10) seed and README
+
+ВАЖНО
+Не делай псевдо-одностраничник.
+Нужен именно аккуратный многостраничный интерфейс.
+Сделай так, чтобы проект уже можно было поднять и показать как MVP.

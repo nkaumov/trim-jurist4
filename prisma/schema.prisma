@@ -1,0 +1,362 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  lawyer
+
+  @@map("user_role")
+}
+
+enum CaseStatus {
+  draft
+  ready_for_analysis
+  analyzing
+  completed
+  archived
+  failed
+
+  @@map("case_status")
+}
+
+enum CasePriority {
+  low
+  medium
+  high
+
+  @@map("case_priority")
+}
+
+enum CaseFileCategory {
+  main_contract
+  appendix
+  disagreement_document
+  client_note_attachment
+  analysis_result_attachment
+  other
+
+  @@map("case_file_category")
+}
+
+enum DisagreementInputType {
+  document
+  free_text
+  manual_items
+
+  @@map("disagreement_input_type")
+}
+
+enum AnalysisRunStatus {
+  queued
+  processing
+  completed
+  failed
+
+  @@map("analysis_run_status")
+}
+
+enum RiskLevel {
+  low
+  medium
+  high
+
+  @@map("risk_level")
+}
+
+enum AnalysisBasisType {
+  law
+  internal_rule
+  knowledge_doc
+  template
+  comment
+  other
+
+  @@map("analysis_basis_type")
+}
+
+model Organization {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String
+  slug        String   @unique
+  description String?  @db.Text
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  users     User[]
+  cases     Case[]
+  auditLogs AuditLog[]
+
+  globalKnowledgeSources GlobalKnowledgeSource[]
+  organizationKnowledgeSources OrganizationKnowledgeSource[]
+
+  @@map("organizations")
+}
+
+model User {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @map("organization_id") @db.Uuid
+  fullName       String    @map("full_name")
+  email          String    @unique
+  passwordHash   String    @map("password_hash")
+  role           UserRole
+  isActive       Boolean   @default(true) @map("is_active")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+  lastLoginAt    DateTime? @map("last_login_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  createdCases Case[] @relation("case_created_by")
+  uploadedCaseFiles CaseFile[] @relation("case_file_uploaded_by")
+  disagreementInputsCreated DisagreementInput[] @relation("disagreement_input_created_by")
+  analysisRunsStarted AnalysisRun[] @relation("analysis_run_started_by")
+  caseStatusChanges CaseStatusHistory[] @relation("case_status_history_changed_by")
+  organizationKnowledgeUploaded OrganizationKnowledgeSource[] @relation("org_knowledge_uploaded_by")
+  auditLogs AuditLog[] @relation("audit_log_user")
+
+  refreshTokens RefreshToken[]
+
+  @@index([organizationId])
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  tokenHash String   @unique @map("token_hash")
+  expiresAt DateTime @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+model GlobalKnowledgeSource {
+  id          String   @id @default(uuid()) @db.Uuid
+  title       String
+  description String?  @db.Text
+  sourceType  String   @map("source_type")
+  filePath    String?  @map("file_path")
+  externalUrl String?  @map("external_url")
+  mimeType    String?  @map("mime_type")
+  tags        String[]
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // optional: allow binding globals to an org in the future
+  organizationId String? @map("organization_id") @db.Uuid
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  @@index([isActive])
+  @@map("global_knowledge_sources")
+}
+
+model OrganizationKnowledgeSource {
+  id              String   @id @default(uuid()) @db.Uuid
+  organizationId  String   @map("organization_id") @db.Uuid
+  uploadedByUserId String  @map("uploaded_by_user_id") @db.Uuid
+  title           String
+  description     String?  @db.Text
+  sourceType      String   @map("source_type")
+  filePath        String?  @map("file_path")
+  externalUrl     String?  @map("external_url")
+  mimeType        String?  @map("mime_type")
+  tags            String[]
+  isActive        Boolean  @default(true) @map("is_active")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  uploadedBy   User         @relation("org_knowledge_uploaded_by", fields: [uploadedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId])
+  @@map("organization_knowledge_sources")
+}
+
+model Case {
+  id              String       @id @default(uuid()) @db.Uuid
+  organizationId  String       @map("organization_id") @db.Uuid
+  createdByUserId String       @map("created_by_user_id") @db.Uuid
+  title           String
+  counterpartyName String      @map("counterparty_name")
+  status          CaseStatus
+  description     String?      @db.Text
+  priority        CasePriority
+  contractType    String?      @map("contract_type")
+  notes           String?      @db.Text
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+  archivedAt      DateTime?    @map("archived_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User         @relation("case_created_by", fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  files             CaseFile[]
+  disagreementInput DisagreementInput?
+  analysisRuns      AnalysisRun[]
+  statusHistory     CaseStatusHistory[]
+
+  @@index([organizationId, updatedAt])
+  @@index([status])
+  @@map("cases")
+}
+
+model CaseFile {
+  id              String           @id @default(uuid()) @db.Uuid
+  caseId          String           @map("case_id") @db.Uuid
+  uploadedByUserId String          @map("uploaded_by_user_id") @db.Uuid
+  fileCategory    CaseFileCategory @map("file_category")
+  originalName    String           @map("original_name")
+  storedName      String           @map("stored_name")
+  filePath        String           @map("file_path")
+  mimeType        String           @map("mime_type")
+  fileSize        Int              @map("file_size")
+  extractedText   String?          @map("extracted_text") @db.Text
+  createdAt       DateTime         @default(now()) @map("created_at")
+
+  case       Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  uploadedBy User @relation("case_file_uploaded_by", fields: [uploadedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([caseId])
+  @@map("case_files")
+}
+
+model DisagreementInput {
+  id            String               @id @default(uuid()) @db.Uuid
+  caseId        String               @unique @map("case_id") @db.Uuid
+  inputType     DisagreementInputType @map("input_type")
+  freeText      String?              @map("free_text") @db.Text
+  createdByUserId String             @map("created_by_user_id") @db.Uuid
+  createdAt     DateTime             @default(now()) @map("created_at")
+  updatedAt     DateTime             @updatedAt @map("updated_at")
+
+  case       Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  createdBy  User @relation("disagreement_input_created_by", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  items      DisagreementItem[]
+
+  @@map("disagreement_inputs")
+}
+
+model DisagreementItem {
+  id                 String   @id @default(uuid()) @db.Uuid
+  disagreementInputId String  @map("disagreement_input_id") @db.Uuid
+  clauseNumber       String?  @map("clause_number")
+  clauseTitle        String?  @map("clause_title")
+  ourVersion         String?  @map("our_version") @db.Text
+  counterpartyVersion String? @map("counterparty_version") @db.Text
+  clientRequest      String?  @map("client_request") @db.Text
+  comment            String?  @db.Text
+  sortOrder          Int      @map("sort_order")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  input DisagreementInput @relation(fields: [disagreementInputId], references: [id], onDelete: Cascade)
+
+  @@index([disagreementInputId, sortOrder])
+  @@map("disagreement_items")
+}
+
+model AnalysisRun {
+  id                 String          @id @default(uuid()) @db.Uuid
+  caseId             String          @map("case_id") @db.Uuid
+  startedByUserId    String          @map("started_by_user_id") @db.Uuid
+  status             AnalysisRunStatus
+  requestPayloadJson Json            @map("request_payload_json")
+  responsePayloadJson Json?          @map("response_payload_json")
+  summary            String?         @db.Text
+  finalRecommendation String?        @map("final_recommendation") @db.Text
+  draftProtocolText  String?         @map("draft_protocol_text") @db.Text
+  errorMessage       String?         @map("error_message") @db.Text
+  startedAt          DateTime        @default(now()) @map("started_at")
+  finishedAt         DateTime?       @map("finished_at")
+  createdAt          DateTime        @default(now()) @map("created_at")
+
+  case      Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  startedBy User @relation("analysis_run_started_by", fields: [startedByUserId], references: [id], onDelete: Restrict)
+  positions AnalysisPosition[]
+
+  @@index([caseId, createdAt])
+  @@map("analysis_runs")
+}
+
+model AnalysisPosition {
+  id                  String    @id @default(uuid()) @db.Uuid
+  analysisRunId        String    @map("analysis_run_id") @db.Uuid
+  clauseNumber         String?   @map("clause_number")
+  clauseTitle          String    @map("clause_title")
+  ourVersion           String?   @map("our_version") @db.Text
+  counterpartyVersion  String?   @map("counterparty_version") @db.Text
+  aiComment            String    @map("ai_comment") @db.Text
+  recommendation       String    @db.Text
+  suggestedProtocolText String?  @map("suggested_protocol_text") @db.Text
+  riskLevel            RiskLevel @map("risk_level")
+  sortOrder            Int       @map("sort_order")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  run   AnalysisRun @relation(fields: [analysisRunId], references: [id], onDelete: Cascade)
+  bases AnalysisPositionBasis[]
+
+  @@index([analysisRunId, sortOrder])
+  @@map("analysis_positions")
+}
+
+model AnalysisPositionBasis {
+  id                String           @id @default(uuid()) @db.Uuid
+  analysisPositionId String          @map("analysis_position_id") @db.Uuid
+  basisType         AnalysisBasisType @map("basis_type")
+  sourceTitle       String           @map("source_title")
+  sourceReference   String?          @map("source_reference")
+  quoteText         String?          @map("quote_text") @db.Text
+  priorityOrder     Int              @map("priority_order")
+  createdAt         DateTime         @default(now()) @map("created_at")
+
+  position AnalysisPosition @relation(fields: [analysisPositionId], references: [id], onDelete: Cascade)
+
+  @@index([analysisPositionId, priorityOrder])
+  @@map("analysis_position_bases")
+}
+
+model CaseStatusHistory {
+  id              String     @id @default(uuid()) @db.Uuid
+  caseId          String     @map("case_id") @db.Uuid
+  changedByUserId String     @map("changed_by_user_id") @db.Uuid
+  fromStatus      CaseStatus? @map("from_status")
+  toStatus        CaseStatus  @map("to_status")
+  comment         String?     @db.Text
+  createdAt       DateTime    @default(now()) @map("created_at")
+
+  case      Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  changedBy User @relation("case_status_history_changed_by", fields: [changedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([caseId, createdAt])
+  @@map("case_status_history")
+}
+
+model AuditLog {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String?  @map("organization_id") @db.Uuid
+  userId         String?  @map("user_id") @db.Uuid
+  entityType     String   @map("entity_type")
+  entityId       String   @map("entity_id")
+  action         String
+  payloadJson    Json?    @map("payload_json")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  user         User?         @relation("audit_log_user", fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([userId, createdAt])
+  @@map("audit_logs")
+}
